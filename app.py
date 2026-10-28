@@ -8,7 +8,7 @@ from streamlit_folium import st_folium
 from skyfield.api import load, wgs84
 
 # ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y CSS (MISSION CONTROL ESTÉTICA)
+# 1. CONFIGURACIÓN DE PÁGINA Y ESTILO MISSION CONTROL
 # ==========================================
 st.set_page_config(
     page_title="HOUSTON FDO | SE SECTOR",
@@ -17,12 +17,12 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Inyección de CSS para estilo consola NASA
+# Estilo CSS personalizado para consola retro / NASA Mission Control
 estilo_mision_control = """
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
     
-    /* Fondo global y fuente monoespaciada */
+    /* Fondo global y tipografía monoespaciada */
     .stApp {
         background-color: #050509 !important;
         font-family: 'Share Tech Mono', monospace !important;
@@ -31,14 +31,14 @@ estilo_mision_control = """
     
     /* Títulos y cabeceras */
     h1, h2, h3 {
-        color: #00ffff !important; /* Cian brillante */
+        color: #00ffff !important; /* Cian */
         text-transform: uppercase;
         letter-spacing: 2px;
         border-bottom: 1px solid #00ffff;
         padding-bottom: 5px;
     }
     
-    /* Cajas de métricas (Telemetry) */
+    /* Cajas de métricas de telemetría */
     div[data-testid="metric-container"] {
         background-color: #0a0a1a !important;
         border: 1px solid #00ffff !important;
@@ -53,7 +53,7 @@ estilo_mision_control = """
         color: #ffffff !important;
     }
 
-    /* Truco: Invertir colores de OpenStreetMap para hacerlo modo oscuro estilo radar */
+    /* Inversión de mapa OpenStreetMap a modo oscuro sintético */
     iframe[title="streamlit_folium.st_folium"] {
         filter: invert(100%) hue-rotate(180deg) brightness(85%) contrast(120%) grayscale(20%);
         border: 2px solid #00ffff;
@@ -69,12 +69,17 @@ estilo_mision_control = """
 st.markdown(estilo_mision_control, unsafe_allow_html=True)
 
 # ==========================================
-# 2. CONSTANTES Y FUNCIONES MATEMÁTICAS
+# 2. DELIMITACIÓN GEOGRÁFICA Y GEOMETRÍA
 # ==========================================
 POLIGONO_ZONA = [
-    (-2.075, 37.648), (-1.695, 37.673), (-1.582, 37.411), 
-    (-1.891, 36.995), (-2.392, 37.050), (-2.297, 37.353)
+    (-2.075, 37.648), # Vélez-Rubio
+    (-1.695, 37.673), # Lorca
+    (-1.582, 37.411), # Águilas 
+    (-1.891, 36.995), # Carboneras
+    (-2.392, 37.050), # Tabernas
+    (-2.297, 37.353)  # Olula del Río
 ]
+
 LOMIN, LOMAX = min(p[0] for p in POLIGONO_ZONA), max(p[0] for p in POLIGONO_ZONA)
 LAMIN, LAMAX = min(p[1] for p in POLIGONO_ZONA), max(p[1] for p in POLIGONO_ZONA)
 
@@ -95,7 +100,7 @@ def dentro_del_poligono(lon, lat, poligono):
     return adentro
 
 # ==========================================
-# 3. MOTOR DE TELEMETRÍA (TLEs y API)
+# 3. TELEMETRÍA ORBITAL (SKYFIELD / CELESTRAK)
 # ==========================================
 @st.cache_resource(ttl=43200)
 def cargar_satelites():
@@ -107,36 +112,77 @@ def cargar_satelites():
         if res.status_code == 200:
             with open(archivo_tle, 'w', encoding='utf-8') as f:
                 f.write(res.text)
-    except:
+    except Exception:
         pass 
+
     ts = load.timescale()
     try:
         if os.path.exists(archivo_tle):
             satelites = load.tle_file(archivo_tle)
         else:
             satelites = load.tle_file(url, filename=archivo_tle)
-    except:
+    except Exception:
         satelites = []
+
     return satelites, ts
 
 with st.spinner('ESTABLECIENDO ENLACE DE DATOS CON CELESTRAK...'):
     satelites_global, ts_global = cargar_satelites()
 
-# Cacheamos la respuesta durante 20 segundos para no saturar la IP compartida
+def obtener_satelites(lista_sats, escala_tiempo):
+    if not lista_sats:
+        return []
+    t = escala_tiempo.now()
+    satelites_detectados = []
+    for sat in lista_sats:
+        subpunto = wgs84.subpoint(sat.at(t))
+        lat, lon, alt_km = subpunto.latitude.degrees, subpunto.longitude.degrees, subpunto.elevation.km
+        if lat and lon and alt_km > 100 and dentro_del_poligono(lon, lat, POLIGONO_ZONA):
+            satelites_detectados.append({
+                "DESIGNATOR": sat.name,
+                "LAT": round(lat, 3),
+                "LON": round(lon, 3),
+                "ALT (km)": round(alt_km, 1)
+            })
+    return satelites_detectados
+
+# ==========================================
+# 4. TELEMETRÍA ATMOSFÉRICA (OPENSKY OAUTH2)
+# ==========================================
+@st.cache_data(ttl=1500)
+def obtener_access_token_opensky(client_id, client_secret):
+    auth_url = "https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token"
+    payload = {
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    try:
+        res = requests.post(auth_url, data=payload, headers=headers, timeout=10)
+        if res.status_code == 200:
+            return res.json().get("access_token")
+    except Exception:
+        pass
+    return None
+
 @st.cache_data(ttl=20)
 def obtener_vuelos():
     url = "https://opensky-network.org/api/states/all"
     params = {"lamin": LAMIN, "lamax": LAMAX, "lomin": LOMIN, "lomax": LOMAX}
+    headers = {}
     vuelos_detectados = []
     
-    # Intenta usar credenciales de Streamlit Secrets si están configuradas
-    auth = None
-    if "OPENSKY_USER" in st.secrets and "OPENSKY_PASS" in st.secrets:
-        auth = (st.secrets["OPENSKY_USER"], st.secrets["OPENSKY_PASS"])
-        
+    if "OPENSKY_CLIENT_ID" in st.secrets and "OPENSKY_CLIENT_SECRET" in st.secrets:
+        token = obtener_access_token_opensky(
+            st.secrets["OPENSKY_CLIENT_ID"], 
+            st.secrets["OPENSKY_CLIENT_SECRET"]
+        )
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+            
     try:
-        res = requests.get(url, params=params, auth=auth, timeout=5)
-        
+        res = requests.get(url, params=params, headers=headers, timeout=5)
         if res.status_code == 200:
             states = res.json().get("states", [])
             if states:
@@ -145,36 +191,27 @@ def obtener_vuelos():
                     lon, lat, alt_m, vel_ms = s[5], s[6], s[7] or 0, s[9] or 0
                     if lon and lat and dentro_del_poligono(lon, lat, POLIGONO_ZONA):
                         vuelos_detectados.append({
-                            "CALLSIGN": callsign, "LAT": lat, "LON": lon,
-                            "ALT (ft)": int(alt_m * 3.28084), "VEL (km/h)": int(vel_ms * 3.6)
+                            "CALLSIGN": callsign,
+                            "LAT": round(lat, 3),
+                            "LON": round(lon, 3),
+                            "ALT (ft)": int(alt_m * 3.28084),
+                            "VEL (km/h)": int(vel_ms * 3.6)
                         })
         elif res.status_code == 429:
-            st.toast("⚠️ Rate limit de OpenSky alcanzado (HTTP 429). Esperando liberación de IP...", icon="⏳")
-            
+            st.toast("⚠️ Rate limit alcanzado en OpenSky (HTTP 429).", icon="⏳")
+        elif res.status_code == 401:
+            st.toast("🔑 Token de OpenSky inválido o expirado (HTTP 401).", icon="❌")
     except Exception:
         pass
         
     return vuelos_detectados
 
-def obtener_satelites(lista_sats, escala_tiempo):
-    if not lista_sats: return []
-    t = escala_tiempo.now()
-    satelites_detectados = []
-    for sat in lista_sats:
-        subpunto = wgs84.subpoint(sat.at(t))
-        lat, lon, alt_km = subpunto.latitude.degrees, subpunto.longitude.degrees, subpunto.elevation.km
-        if lat and lon and alt_km > 100 and dentro_del_poligono(lon, lat, POLIGONO_ZONA):
-            satelites_detectados.append({
-                "DESIGNATOR": sat.name, "LAT": lat, "LON": lon, "ALT (km)": round(alt_km, 1)
-            })
-    return satelites_detectados
-
+# ==========================================
+# 5. RENDERIZADO DE INTERFAZ Y REFRESCO
+# ==========================================
 vuelos = obtener_vuelos()
 sats = obtener_satelites(satelites_global, ts_global)
 
-# ==========================================
-# 4. FRONTEND INTERFAZ (HOUSTON DISPLAY)
-# ==========================================
 st.title("M.C.C. FLIGHT DYNAMICS // SE SECTOR")
 
 m1, m2, m3, m4 = st.columns(4)
@@ -190,24 +227,26 @@ with col_map:
     centro_lat = sum(p[1] for p in POLIGONO_ZONA) / len(POLIGONO_ZONA)
     centro_lon = sum(p[0] for p in POLIGONO_ZONA) / len(POLIGONO_ZONA)
     
-    # Usamos OpenStreetMap, pero el CSS de arriba invertirá los colores a modo oscuro automático
     m = folium.Map(location=[centro_lat, centro_lon], zoom_start=9, tiles="OpenStreetMap")
     
+    # Delimitación del polígono objetivo
     folium.Polygon(
         locations=[[p[1], p[0]] for p in POLIGONO_ZONA],
         color="#00ffff", fill=True, fill_color="#00ffff", fill_opacity=0.1, weight=2
     ).add_to(m)
     
+    # Marcadores de aviación (Puntos amarillos)
     for v in vuelos:
         folium.CircleMarker(
             location=[v["LAT"], v["LON"]], radius=6, color="yellow", fill=True,
-            popup=f"AERO: {v['CALLSIGN']}"
+            popup=f"AERO: {v['CALLSIGN']} | Alt: {v['ALT (ft)']} ft"
         ).add_to(m)
         
+    # Marcadores de satélites (Puntos rojos)
     for s in sats:
         folium.CircleMarker(
             location=[s["LAT"], s["LON"]], radius=6, color="red", fill=True,
-            popup=f"ORBIT: {s['DESIGNATOR']}"
+            popup=f"ORBIT: {s['DESIGNATOR']} | Alt: {s['ALT (km)']} km"
         ).add_to(m)
         
     st_folium(m, width="100%", height=550, returned_objects=[])
@@ -225,6 +264,6 @@ with col_data:
     else:
         st.info("NO ORBITAL OBJECTS IN ZENITH")
 
-# Bucle de refresco automático
+# Bucle de actualización automática cada 15 segundos
 time.sleep(15)
 st.rerun()
