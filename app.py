@@ -149,7 +149,7 @@ with col_map:
     centro_lat = sum(p[1] for p in POLIGONO_ZONA) / len(POLIGONO_ZONA)
     centro_lon = sum(p[0] for p in POLIGONO_ZONA) / len(POLIGONO_ZONA)
     
-    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=9, tiles="CartoDB dark_matter")
+    m = folium.Map(location=[centro_lat, centro_lon], zoom_start=9, tiles="OpenStreetMap")
     
     puntos_folium = [[p[1], p[0]] for p in POLIGONO_ZONA]
     folium.Polygon(
@@ -190,3 +190,6 @@ with col_data:
         st.dataframe(sats, use_container_width=True)
     else:
         st.info("No hay satélites sobrevolando el cénit actualmente.")
+        # Refresco automático de telemetría y mapa
+time.sleep(15)
+st.rerun()
