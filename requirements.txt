@@ -1,0 +1,5 @@
+streamlit
+skyfield
+requests
+folium
+streamlit-folium
