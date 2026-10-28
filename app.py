@@ -1,3 +1,4 @@
+import os
 import time
 import requests
 from datetime import datetime, timezone
@@ -26,7 +27,6 @@ POLIGONO_ZONA = [
 LOMIN, LOMAX = min(p[0] for p in POLIGONO_ZONA), max(p[0] for p in POLIGONO_ZONA)
 LAMIN, LAMAX = min(p[1] for p in POLIGONO_ZONA), max(p[1] for p in POLIGONO_ZONA)
 
-# Algoritmo Point-in-Polygon (Ray Casting)
 def dentro_del_poligono(lon, lat, poligono):
     num_vertices = len(poligono)
     adentro = False
@@ -43,12 +43,12 @@ def dentro_del_poligono(lon, lat, poligono):
         p1x, p1y = p2x, p2y
     return adentro
 
+# Función robusta con 3 planes de contingencia
 @st.cache_resource(ttl=43200)
 def cargar_satelites():
     url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
     archivo_tle = 'satelites_activos.txt'
     
-    # 1. Intentar descarga manual protegida
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
         res = requests.get(url, headers=headers, timeout=20)
@@ -60,21 +60,20 @@ def cargar_satelites():
 
     ts = load.timescale()
     
-    # 2. Carga con sistema de respaldo (Fallback)
     try:
         if os.path.exists(archivo_tle):
-            # Si el archivo se creó correctamente o ya existía
             satelites = load.tle_file(archivo_tle)
         else:
-            # Plan B: Si no existe, forzamos a Skyfield a que intente bajarlo de la URL directamente
             satelites = load.tle_file(url, filename=archivo_tle)
     except Exception:
-        # Plan C: Si CelesTrak está completamente caído, devolvemos lista vacía para no romper la web
         satelites = []
 
     return satelites, ts
 
-# Obtención de tráfico aéreo
+# EJECUCIÓN OBLIGATORIA: Aquí se crean "satelites_global" y "ts_global"
+with st.spinner('🛰️ Conectando con CelesTrak y calculando órbitas. Esto puede tardar unos segundos...'):
+    satelites_global, ts_global = cargar_satelites()
+
 def obtener_vuelos():
     url = "https://opensky-network.org/api/states/all"
     params = {"lamin": LAMIN, "lamax": LAMAX, "lomin": LOMIN, "lomax": LOMAX}
@@ -102,11 +101,14 @@ def obtener_vuelos():
         pass
     return vuelos_detectados
 
-# Cálculo SGP4 de satélites
-def obtener_satelites():
-    t = ts.now()
+# Se añaden los parámetros para evitar el NameError
+def obtener_satelites(lista_sats, escala_tiempo):
+    if not lista_sats:
+        return []
+        
+    t = escala_tiempo.now() # Ahora sí reconoce la variable 'escala_tiempo'
     satelites_detectados = []
-    for sat in satelites:
+    for sat in lista_sats:
         geocentrico = sat.at(t)
         subpunto = wgs84.subpoint(geocentrico)
         lat, lon = subpunto.latitude.degrees, subpunto.longitude.degrees
@@ -126,14 +128,14 @@ def obtener_satelites():
 st.title("🛰️ Houston SE Sector Tracking System")
 st.caption("Monitorización orbital y atmosférica en tiempo real sobre el polígono del Sureste de España.")
 
-# Botón de refresco manual y estado
 col_head1, col_head2 = st.columns([3, 1])
 with col_head2:
     if st.button("🔄 Actualizar Telemetría", use_container_width=True):
         st.rerun()
 
+# Llamadas finales pasando las variables de forma segura
 vuelos = obtener_vuelos()
-sats = obtener_satelites()
+sats = obtener_satelites(satelites_global, ts_global)
 
 # Métricas superiores
 m1, m2, m3 = st.columns(3)
@@ -144,13 +146,11 @@ m3.metric("Última Actualización UTC", datetime.now(timezone.utc).strftime("%H:
 col_map, col_data = st.columns([2, 1])
 
 with col_map:
-    # Mapa Folium centrado en el polígono
     centro_lat = sum(p[1] for p in POLIGONO_ZONA) / len(POLIGONO_ZONA)
     centro_lon = sum(p[0] for p in POLIGONO_ZONA) / len(POLIGONO_ZONA)
     
     m = folium.Map(location=[centro_lat, centro_lon], zoom_start=9, tiles="CartoDB dark_matter")
     
-    # Renderizar el polígono geográfico (Folium usa [lat, lon])
     puntos_folium = [[p[1], p[0]] for p in POLIGONO_ZONA]
     folium.Polygon(
         locations=puntos_folium,
@@ -162,7 +162,6 @@ with col_map:
         popup="Zona Cobertura Sureste"
     ).add_to(m)
     
-    # Marcar Aviones (Naranja)
     for v in vuelos:
         folium.Marker(
             location=[v["lat"], v["lon"]],
@@ -170,7 +169,6 @@ with col_map:
             icon=folium.Icon(color="orange", icon="plane", prefix="fa")
         ).add_to(m)
         
-    # Marcar Satélites (Verde)
     for s in sats:
         folium.Marker(
             location=[s["lat"], s["lon"]],
