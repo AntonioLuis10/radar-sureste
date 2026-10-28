@@ -1,5 +1,6 @@
 streamlit
+streamlit-folium
+folium
 skyfield
 requests
-folium
-streamlit-folium
+streamlit-autorefresh
