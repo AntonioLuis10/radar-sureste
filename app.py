@@ -48,25 +48,31 @@ def cargar_satelites():
     url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
     archivo_tle = 'satelites_activos.txt'
     
-    # 1. Descarga manual protegida con User-Agent y Timeout
+    # 1. Intentar descarga manual protegida
     try:
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        res = requests.get(url, headers=headers, timeout=15)
+        res = requests.get(url, headers=headers, timeout=20)
         if res.status_code == 200:
             with open(archivo_tle, 'w', encoding='utf-8') as f:
                 f.write(res.text)
-    except Exception as e:
-        # Si falla la conexión pero el archivo ya existía de una ejecución previa hoy, continuará
+    except Exception:
         pass 
 
-    # 2. Carga en Skyfield desde el archivo local en lugar de la URL
-    satelites = load.tle_file(archivo_tle)
     ts = load.timescale()
-    return satelites, ts
+    
+    # 2. Carga con sistema de respaldo (Fallback)
+    try:
+        if os.path.exists(archivo_tle):
+            # Si el archivo se creó correctamente o ya existía
+            satelites = load.tle_file(archivo_tle)
+        else:
+            # Plan B: Si no existe, forzamos a Skyfield a que intente bajarlo de la URL directamente
+            satelites = load.tle_file(url, filename=archivo_tle)
+    except Exception:
+        # Plan C: Si CelesTrak está completamente caído, devolvemos lista vacía para no romper la web
+        satelites = []
 
-# Llamada a la función con el efecto de carga visual (Spinner)
-with st.spinner('🛰️ Conectando con CelesTrak y calculando órbitas. Esto puede tardar unos segundos...'):
-    satelites, ts = cargar_satelites()
+    return satelites, ts
 
 # Obtención de tráfico aéreo
 def obtener_vuelos():
