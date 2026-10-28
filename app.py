@@ -43,15 +43,30 @@ def dentro_del_poligono(lon, lat, poligono):
         p1x, p1y = p2x, p2y
     return adentro
 
-# Cargar TLEs con caché de Streamlit (actualiza cada 12 horas para no sobrecargar CelesTrak)
 @st.cache_resource(ttl=43200)
 def cargar_satelites():
-    estaciones = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
-    satelites = load.tle_file(estaciones)
+    url = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=tle'
+    archivo_tle = 'satelites_activos.txt'
+    
+    # 1. Descarga manual protegida con User-Agent y Timeout
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        res = requests.get(url, headers=headers, timeout=15)
+        if res.status_code == 200:
+            with open(archivo_tle, 'w', encoding='utf-8') as f:
+                f.write(res.text)
+    except Exception as e:
+        # Si falla la conexión pero el archivo ya existía de una ejecución previa hoy, continuará
+        pass 
+
+    # 2. Carga en Skyfield desde el archivo local en lugar de la URL
+    satelites = load.tle_file(archivo_tle)
     ts = load.timescale()
     return satelites, ts
 
-satelites, ts = cargar_satelites()
+# Llamada a la función con el efecto de carga visual (Spinner)
+with st.spinner('🛰️ Conectando con CelesTrak y calculando órbitas. Esto puede tardar unos segundos...'):
+    satelites, ts = cargar_satelites()
 
 # Obtención de tráfico aéreo
 def obtener_vuelos():
