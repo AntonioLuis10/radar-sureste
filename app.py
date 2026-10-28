@@ -122,12 +122,21 @@ def cargar_satelites():
 with st.spinner('ESTABLECIENDO ENLACE DE DATOS CON CELESTRAK...'):
     satelites_global, ts_global = cargar_satelites()
 
+# Cacheamos la respuesta durante 20 segundos para no saturar la IP compartida
+@st.cache_data(ttl=20)
 def obtener_vuelos():
     url = "https://opensky-network.org/api/states/all"
     params = {"lamin": LAMIN, "lamax": LAMAX, "lomin": LOMIN, "lomax": LOMAX}
     vuelos_detectados = []
+    
+    # Intenta usar credenciales de Streamlit Secrets si están configuradas
+    auth = None
+    if "OPENSKY_USER" in st.secrets and "OPENSKY_PASS" in st.secrets:
+        auth = (st.secrets["OPENSKY_USER"], st.secrets["OPENSKY_PASS"])
+        
     try:
-        res = requests.get(url, params=params, timeout=5)
+        res = requests.get(url, params=params, auth=auth, timeout=5)
+        
         if res.status_code == 200:
             states = res.json().get("states", [])
             if states:
@@ -139,8 +148,12 @@ def obtener_vuelos():
                             "CALLSIGN": callsign, "LAT": lat, "LON": lon,
                             "ALT (ft)": int(alt_m * 3.28084), "VEL (km/h)": int(vel_ms * 3.6)
                         })
-    except:
+        elif res.status_code == 429:
+            st.toast("⚠️ Rate limit de OpenSky alcanzado (HTTP 429). Esperando liberación de IP...", icon="⏳")
+            
+    except Exception:
         pass
+        
     return vuelos_detectados
 
 def obtener_satelites(lista_sats, escala_tiempo):
